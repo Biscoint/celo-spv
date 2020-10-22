@@ -1,21 +1,25 @@
-import { newKit } from "@celo/contractkit";
 import Web3 from "web3";
+import { newKitFromWeb3 } from "@celo/contractkit";
 import config from "config";
 import Conf from "conf";
-import erc20abi from "human-standard-token-abi";
+import { BlockHeader } from "web3-eth";
+import { Subscription } from "web3-core-subscriptions";
+import { IBlockchainConfig } from "./types";
+
 
 const dataPath: string = config.get("dataPath");
+const blockchainConfig: IBlockchainConfig = config.get("blockchainConfig");
 
 const store = new Conf({
   cwd: dataPath,
 });
 
-const CELO_BLOCK_TIME_SECONDS = 13;
-
-const MAX_DAYS_BLOCKS_RANGE = /* settings.core.maxPastDaysForBlockRange || */ 30;
+const CELO_BLOCK_TIME_SECONDS = blockchainConfig.blockTime;
+const MAX_DAYS_BLOCKS_RANGE = blockchainConfig.maxPastDaysForBlockRange;
+const WS_URL = blockchainConfig.wsUrl;
 
 const web3WsProvider = new Web3.providers.WebsocketProvider(
-  "wss://forno.celo.org/ws",
+  WS_URL,
   {
     timeout: 30000,
     reconnect: {
@@ -27,25 +31,22 @@ const web3WsProvider = new Web3.providers.WebsocketProvider(
   }
 );
 
-const web3Cli = new Web3(web3WsProvider);
+const web3Instance = new Web3(web3WsProvider);
+// @ts-ignore
+const kit = newKitFromWeb3(web3Instance);
 
-/** @type {Subscription<BlockHeader>} */
-let ethSub = null;
-
-const cUSDContract = new web3Cli.eth.Contract(
-  erc20abi,
-  settings.core.contractAddress
-);
 let cUSDEvents = null;
 
 web3WsProvider.on("connect", async () => {
   console.log("Websocket provider connected");
 
-  ethSub = web3Cli.eth.subscribe("newBlockHeaders", (err, block) => {
-    if (!err) console.log(`${block.number} newBlockHeaders!`);
+  const celoSub: Subscription<BlockHeader> = web3Instance.eth.subscribe("newBlockHeaders", (err, blockHeader) => {
+    if (!err) console.log(`${blockHeader.number} newBlockHeaders!`);
   });
 
-  const blockNumber = await web3Cli.eth.getBlockNumber();
+  const stabletoken = await kit.contracts.getStableToken();
+
+  const blockNumber = await web3Instance.eth.getBlockNumber();
   console.log(`Current Block: ${blockNumber}`);
 
   const currentBlock = store.get("currentBlock") as number;
@@ -53,11 +54,13 @@ web3WsProvider.on("connect", async () => {
   const fromBlock =
     currentBlock + 1 ||
     blockNumber -
-      Math.floor((MAX_DAYS_BLOCKS_RANGE * 24 * 60 * 60) / MAX_DAYS_BLOCKS_RANGE);
+      Math.floor(
+        (MAX_DAYS_BLOCKS_RANGE * 24 * 60 * 60) / CELO_BLOCK_TIME_SECONDS
+      );
 
   console.log(`Getting events from block %d`, fromBlock);
 
-  cUSDEvents = cUSDContract.events.allEvents({}, { fromBlock });
+  cUSDEvents = stabletoken.events.allEvents({}, { fromBlock });
 
   cUSDEvents.on("connected", (connectionID) => {
     console.log(`Connected with ${connectionID}!`);
@@ -75,7 +78,7 @@ web3WsProvider.on("connect", async () => {
       }
       console.log("new TX!", data.transactionHash);
     } else {
-      console.log(data);
+      // console.log(data);
     }
   });
 
@@ -94,15 +97,6 @@ web3WsProvider.on("error", () => {
 
 web3WsProvider.on("reconnect", () => {
   console.log("Websocket provider reconnecting...");
-  if (ethSub) {
-    ethSub.unsubscribe();
-    ethSub = null;
-  }
-
-  if (cUSDEvents) {
-    cUSDEvents.removeAllListeners();
-    cUSDEvents = null;
-  }
 });
 
 web3WsProvider.on("close", () => {

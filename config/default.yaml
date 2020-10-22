@@ -1,1 +1,5 @@
-
+dataPath: ./data
+blockchainConfig:
+  wsUrl: wss://forno.celo.org/ws
+  maxPastDaysForBlockRange: 30
+  blockTime: 5
